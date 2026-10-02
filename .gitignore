@@ -1,0 +1,23 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+
+# Rider
+.idea/
+
+# VS Code
+.vscode/
+
+# Секреты
+.env
+*.env.local
+
+# Docker
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
