@@ -1,41 +1,72 @@
+using Microsoft.EntityFrameworkCore;
+using Polly;
+using OrderService.Data;
+using OrderService.Endpoints;
+using OrderService.Services;
+
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
-builder.Services.AddOpenApi();
+// ── Swagger ───────────────────────────────────────────────────────────────
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(o =>
+{
+    o.SwaggerDoc("v1", new() { Title = "OrderService API", Version = "v1" });
+});
+
+// ── База данных ───────────────────────────────────────────────────────────
+builder.Services.AddDbContext<OrderDbContext>(options =>
+    options.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
+
+// ── HTTP-клиент для CatalogService с Polly ────────────────────────────────
+builder.Services.AddHttpClient<ICatalogServiceClient, CatalogServiceClient>(client =>
+{
+    client.BaseAddress = new Uri(builder.Configuration["CatalogService:BaseUrl"]!);
+    client.Timeout = TimeSpan.FromSeconds(5);
+})
+.AddTransientHttpErrorPolicy(policy =>
+    policy.WaitAndRetryAsync(
+        retryCount: 3,
+        sleepDurationProvider: attempt => TimeSpan.FromMilliseconds(200 * Math.Pow(2, attempt)),
+        onRetry: (outcome, timespan, attempt, _) =>
+        {
+            Console.WriteLine(
+                $"⚠️ CatalogService retry #{attempt} через {timespan.TotalMilliseconds}ms: {outcome.Exception?.Message}");
+        }))
+.AddTransientHttpErrorPolicy(policy =>
+    policy.CircuitBreakerAsync(
+        handledEventsAllowedBeforeBreaking: 5,
+        durationOfBreak: TimeSpan.FromSeconds(30),
+        onBreak: (_, duration) =>
+            Console.WriteLine($"⚡ Circuit Breaker ОТКРЫТ на {duration.TotalSeconds}s"),
+        onReset: () =>
+            Console.WriteLine("✅ Circuit Breaker ЗАКРЫТ — CatalogService снова доступен")));
+
+// ── Сервисы ───────────────────────────────────────────────────────────────
+builder.Services.AddScoped<OrderManagementService>();
+
+// ── Health Checks ─────────────────────────────────────────────────────────
+builder.Services.AddHealthChecks()
+    .AddNpgSql(
+        builder.Configuration.GetConnectionString("Default")!,
+        name: "postgresql",
+        tags: new[] { "db", "ready" });
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
-    app.MapOpenApi();
+    app.UseSwagger();
+    app.UseSwaggerUI();
 }
 
-app.UseHttpsRedirection();
-
-var summaries = new[]
+using (var scope = app.Services.CreateScope())
 {
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
+    var db = scope.ServiceProvider.GetRequiredService<OrderDbContext>();
+    await db.Database.MigrateAsync();
+}
 
-app.MapGet("/weatherforecast", () =>
-{
-    var forecast =  Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast");
+app.MapOrderEndpoints();
+app.MapHealthChecks("/health");
+app.MapGet("/", () => "OrderService is running");
 
 app.Run();
-
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}
