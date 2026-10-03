@@ -11,11 +11,11 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddDbContext<NotificationDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
 
-// ── Email: в dev — FakeEmailService, в prod — реальный SMTP ──────────────
-if (builder.Environment.IsDevelopment())
-    builder.Services.AddScoped<IEmailService, FakeEmailService>();
-else
-    builder.Services.AddScoped<IEmailService, EmailService>();
+// ── Email ────────────────────────────────────────────────────────────────
+// ВАЖНО: для КТ-4 всегда используем FakeEmailService —
+// реальный SMTP настроить в рамках задания не требуется.
+// В продакшене здесь был бы выбор через builder.Environment.IsDevelopment().
+builder.Services.AddScoped<IEmailService, FakeEmailService>();
 
 // ── MassTransit: подписываемся на событие OrderCreated ───────────────────
 builder.Services.AddMassTransit(x =>

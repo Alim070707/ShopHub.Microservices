@@ -1,0 +1,17 @@
+﻿services:
+  catalog-service:
+    ports:
+      - "5065:8080"
+
+  order-service:
+    ports:
+      - "5212:8080"
+
+  notification-service:
+    ports:
+      - "5037:8080"
+
+  rabbitmq:
+    ports:
+      - "5672:5672"
+      - "15672:15672"
