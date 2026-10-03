@@ -1,41 +1,62 @@
+using MassTransit;
+using Microsoft.EntityFrameworkCore;
+using NotificationService.Consumers;
+using NotificationService.Data;
+using NotificationService.Services;
+using Contracts.Events;
+
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
-builder.Services.AddOpenApi();
+// ── БД ────────────────────────────────────────────────────────────────────
+builder.Services.AddDbContext<NotificationDbContext>(options =>
+    options.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
+
+// ── Email: в dev — FakeEmailService, в prod — реальный SMTP ──────────────
+if (builder.Environment.IsDevelopment())
+    builder.Services.AddScoped<IEmailService, FakeEmailService>();
+else
+    builder.Services.AddScoped<IEmailService, EmailService>();
+
+// ── MassTransit: подписываемся на событие OrderCreated ───────────────────
+builder.Services.AddMassTransit(x =>
+{
+    // Регистрируем consumer
+    x.AddConsumer<OrderCreatedConsumer>();
+
+    x.UsingRabbitMq((context, cfg) =>
+    {
+        cfg.Host(builder.Configuration["RabbitMQ:Host"], "/", h =>
+        {
+            h.Username(builder.Configuration["RabbitMQ:Username"]!);
+            h.Password(builder.Configuration["RabbitMQ:Password"]!);
+        });
+
+        // Привязка к exchange shop.order.created
+        cfg.Message<OrderCreatedEvent>(m => m.SetEntityName("shop.order.created"));
+
+        // MassTransit сам создаст очередь для consumer'а
+        cfg.ConfigureEndpoints(context);
+    });
+});
+
+// ── Health Checks ─────────────────────────────────────────────────────────
+builder.Services.AddHealthChecks()
+    .AddNpgSql(
+        builder.Configuration.GetConnectionString("Default")!,
+        name: "postgresql",
+        tags: new[] { "db", "ready" });
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
+// ── Автоматические миграции при старте ───────────────────────────────────
+using (var scope = app.Services.CreateScope())
 {
-    app.MapOpenApi();
+    var db = scope.ServiceProvider.GetRequiredService<NotificationDbContext>();
+    await db.Database.MigrateAsync();
 }
 
-app.UseHttpsRedirection();
-
-var summaries = new[]
-{
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
-
-app.MapGet("/weatherforecast", () =>
-{
-    var forecast =  Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast");
+// NotificationService не имеет публичного API — только health и корень
+app.MapHealthChecks("/health");
+app.MapGet("/", () => "NotificationService is running");
 
 app.Run();
-
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}
