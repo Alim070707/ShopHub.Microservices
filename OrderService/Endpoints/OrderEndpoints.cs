@@ -42,7 +42,7 @@ public static class OrderEndpoints
             {
                 return Results.Conflict(new { message = ex.Message });
             }
-            catch (HttpRequestException ex)
+            catch (HttpRequestException)
             {
                 return Results.StatusCode(502);  // Bad Gateway — CatalogService недоступен
             }

@@ -1,5 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Polly;
+using MassTransit;
+using Contracts.Events;
 using OrderService.Data;
 using OrderService.Endpoints;
 using OrderService.Services;
@@ -39,12 +41,33 @@ builder.Services.AddHttpClient<ICatalogServiceClient, CatalogServiceClient>(clie
         onBreak: (_, duration) =>
             Console.WriteLine($"⚡ Circuit Breaker ОТКРЫТ на {duration.TotalSeconds}s"),
         onReset: () =>
-            Console.WriteLine("✅ Circuit Breaker ЗАКРЫТ — CatalogService снова доступен")));
+            Console.WriteLine("✅ Circuit Breaker ЗАКРЫТ")));
 
 // ── Сервисы ───────────────────────────────────────────────────────────────
 builder.Services.AddScoped<OrderManagementService>();
 
+// ── MassTransit (RabbitMQ) ───────────────────────────────────────────────
+builder.Services.AddMassTransit(x =>
+{
+    x.UsingRabbitMq((context, cfg) =>
+    {
+        cfg.Host(builder.Configuration["RabbitMQ:Host"], "/", h =>
+        {
+            h.Username(builder.Configuration["RabbitMQ:Username"]!);
+            h.Password(builder.Configuration["RabbitMQ:Password"]!);
+        });
+
+        // Именованный exchange
+        cfg.Message<OrderCreatedEvent>(m => m.SetEntityName("shop.order.created"));
+
+        // Автоматическая настройка endpoints (для consumer'ов)
+        cfg.ConfigureEndpoints(context);
+    });
+});
+
 // ── Health Checks ─────────────────────────────────────────────────────────
+// Проверяем только PostgreSQL. RabbitMQ оставлен без health check:
+// MassTransit сам ретраит подключение и логирует ошибки.
 builder.Services.AddHealthChecks()
     .AddNpgSql(
         builder.Configuration.GetConnectionString("Default")!,
